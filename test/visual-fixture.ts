@@ -71,6 +71,24 @@ e^x=\sum_{n=0}^{\infty}\frac{x^n}{n!}
 \[
 f(x)=\frac{1}{\sigma\sqrt{2\pi}}e^{-\frac{(x-\mu)^2}{2\sigma^2}}
 \]`,
+  inline: String.raw`## Inline image flow regression
+
+反设存在解，取 \(z\) 最小的本原解，即 \(\gcd(x,y)=1\)。模 \(16\) 考察可知 \(x,y\) 中恰有一个为偶数。
+
+由于
+
+\[
+(x^2)^2+(y^2)^2=z^2,
+\]
+
+它构成一个本原勾股三元组，所以存在互素、奇偶性相反的 \(m,n\)，使得
+
+\[
+x^2=m^2-n^2,\qquad y^2=2mn,\qquad z=m^2+n^2.
+\]
+
+因为 \(2mn\) 是平方且 \(\gcd(m,n)=1\)，所以 \(m=r^2\)、\(n=2s^2\)。
+`,
 };
 
 const fixtureName = process.argv[2] ?? "aligned";

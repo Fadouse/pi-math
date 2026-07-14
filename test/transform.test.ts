@@ -17,6 +17,20 @@ test("renders dollar and parenthesized inline math", () => {
   );
 });
 
+test("reports whether inline math occupies its whole source line", () => {
+  const contexts: Array<{ latex: string; standalone: boolean }> = [];
+  const source = String.raw`若 \(n>2\)，则继续。
+\(x^2+y^2=z^2\)`;
+  expandMathInMarkdown(source, (latex, _display, context) => {
+    contexts.push({ latex, standalone: context.standalone });
+    return undefined;
+  });
+  assert.deepEqual(contexts, [
+    { latex: "n>2", standalone: false },
+    { latex: "x^2+y^2=z^2", standalone: true },
+  ]);
+});
+
 test("renders display delimiters as protected generated blocks", () => {
   const source = String.raw`Before
 $$\frac{1}{2}$$
@@ -58,6 +72,14 @@ test("leaves fenced, inline, and HTML code untouched", () => {
   assert.match(output, /<code>\$still_not_math\$<\/code>/);
 });
 
+test("leaves TeX verbatim commands and HTML comments untouched", () => {
+  const source = String.raw`\verb|$not_math$| <!-- \(also_not_math\) --> and $yes$`;
+  const output = expandMathInMarkdown(source, renderOneLine);
+  assert.match(output, /\\verb\|\$not_math\$\|/u);
+  assert.match(output, /<!-- \\\(also_not_math\\\) -->/u);
+  assert.match(output, /`⟦yes⟧`/u);
+});
+
 test("leaves indented Markdown code blocks untouched", () => {
   const source = [
     "    $x^2$",
@@ -86,6 +108,24 @@ test("recognizes standalone equation environments", () => {
   const output = expandMathInMarkdown(source, renderOneLine);
   assert.match(output, new RegExp(GENERATED_MATH_LANGUAGE));
   assert.doesNotMatch(output, /^\\begin/u);
+});
+
+test("ignores closers in TeX comments and matches nested environments", () => {
+  const display = String.raw`$$a % $$ ignored
+ + b$$`;
+  const displayOutput = expandMathInMarkdown(display, renderOneLine);
+  assert.equal((displayOutput.match(new RegExp(GENERATED_MATH_LANGUAGE, "gu")) ?? []).length, 1);
+
+  const nested = String.raw`\begin{aligned}
+a&=\begin{aligned}b&=c\\d&=e\end{aligned}\\
+f&=g % \end{aligned} ignored
+\end{aligned}`;
+  let captured = "";
+  expandMathInMarkdown(nested, (latex) => {
+    captured = latex;
+    return "rendered";
+  });
+  assert.equal(captured, nested);
 });
 
 test("strips only synthetic rendered-math fences", () => {

@@ -3,12 +3,24 @@ export const GENERATED_MATH_LANGUAGE = "pi-math-4f9c";
 export interface MathRenderResult {
   text: string;
   forceBlock?: boolean;
+  rawInline?: boolean;
 }
 
-export type MathRender = (latex: string, display: boolean) => string | undefined;
+export interface MathSpanContext {
+  start: number;
+  end: number;
+  standalone: boolean;
+}
+
+export type MathRender = (
+  latex: string,
+  display: boolean,
+  context: MathSpanContext,
+) => string | undefined;
 export type MathReplacementRender = (
   latex: string,
   display: boolean,
+  context: MathSpanContext,
 ) => string | MathRenderResult | undefined;
 
 const BLOCK_ENVIRONMENT_PATTERN =
@@ -123,6 +135,11 @@ function skipInlineCode(text: string, index: number): number {
 }
 
 function skipHtmlCode(text: string, lowerText: string, index: number): number | undefined {
+  if (text.startsWith("<!--", index)) {
+    const closing = text.indexOf("-->", index + 4);
+    return closing < 0 ? text.length : closing + 3;
+  }
+
   const opening = /^<(code|pre)(?:\s|>)/i.exec(text.slice(index));
   if (!opening) return undefined;
 
@@ -134,14 +151,81 @@ function skipHtmlCode(text: string, lowerText: string, index: number): number | 
   return closing < 0 ? text.length : closing + closingTag.length;
 }
 
-function findUnescapedSequence(text: string, sequence: string, from: number): number {
-  let searchFrom = from;
-  while (searchFrom < text.length) {
-    const found = text.indexOf(sequence, searchFrom);
-    if (found < 0) return -1;
-    if (!isEscaped(text, found)) return found;
-    searchFrom = found + sequence.length;
+function skipTexVerb(text: string, index: number): number | undefined {
+  if (!text.startsWith("\\verb", index) || /[A-Za-z]/.test(text[index + 5] ?? "")) {
+    return undefined;
   }
+  let cursor = index + 5;
+  if (text[cursor] === "*") cursor++;
+  const delimiter = text[cursor];
+  if (!delimiter || /[A-Za-z0-9\s]/u.test(delimiter)) return undefined;
+  const closing = text.indexOf(delimiter, cursor + 1);
+  return closing < 0 ? text.length : closing + 1;
+}
+
+function findUnescapedSequence(text: string, sequence: string, from: number): number {
+  let index = from;
+  while (index < text.length) {
+    if (text[index] === "%" && !isEscaped(text, index)) {
+      const lineEnd = text.indexOf("\n", index + 1);
+      if (lineEnd < 0) return -1;
+      index = lineEnd + 1;
+      continue;
+    }
+    if (text[index] === "\\" && !isEscaped(text, index)) {
+      const verbEnd = skipTexVerb(text, index);
+      if (verbEnd !== undefined) {
+        index = verbEnd;
+        continue;
+      }
+    }
+    if (text.startsWith(sequence, index) && !isEscaped(text, index)) return index;
+    index++;
+  }
+  return -1;
+}
+
+function findEnvironmentEnd(
+  text: string,
+  openingEnd: number,
+  openingName: string,
+): number {
+  const stack = [openingName];
+  let index = openingEnd;
+
+  while (index < text.length) {
+    if (text[index] === "%" && !isEscaped(text, index)) {
+      const lineEnd = text.indexOf("\n", index + 1);
+      if (lineEnd < 0) return -1;
+      index = lineEnd + 1;
+      continue;
+    }
+    if (text[index] !== "\\" || isEscaped(text, index)) {
+      index++;
+      continue;
+    }
+
+    const verbEnd = skipTexVerb(text, index);
+    if (verbEnd !== undefined) {
+      index = verbEnd;
+      continue;
+    }
+
+    const token = /^\\(begin|end)\{([^{}]+)\}/.exec(text.slice(index));
+    if (!token) {
+      index++;
+      continue;
+    }
+    const [, kind, name] = token;
+    if (kind === "begin") {
+      stack.push(name!);
+    } else if (stack.at(-1) === name) {
+      stack.pop();
+      if (stack.length === 0) return index + token[0].length;
+    }
+    index += token[0].length;
+  }
+
   return -1;
 }
 
@@ -176,6 +260,19 @@ function containsUnescapedDollar(text: string): boolean {
   return false;
 }
 
+function spanContext(markdown: string, start: number, end: number): MathSpanContext {
+  const lineStart = markdown.lastIndexOf("\n", start - 1) + 1;
+  const nextLineBreak = markdown.indexOf("\n", end);
+  const lineEnd = nextLineBreak < 0 ? markdown.length : nextLineBreak;
+  return {
+    start,
+    end,
+    standalone:
+      markdown.slice(lineStart, start).trim() === "" &&
+      markdown.slice(end, lineEnd).trim() === "",
+  };
+}
+
 function longestBacktickRun(text: string): number {
   let longest = 0;
   for (const match of text.matchAll(/`+/g)) {
@@ -200,25 +297,28 @@ function displayCodeBlock(text: string): string {
 function replacementFor(
   latex: string,
   display: boolean,
+  context: MathSpanContext,
   renderMath: MathReplacementRender,
 ): string | undefined {
   if (!latex.trim()) return undefined;
 
   let rendered: string | MathRenderResult | undefined;
   try {
-    rendered = renderMath(latex, display);
+    rendered = renderMath(latex, display, context);
   } catch {
     return undefined;
   }
 
   if (!rendered) return undefined;
-  const result = typeof rendered === "string" ? { text: rendered, forceBlock: false } : rendered;
+  const result: MathRenderResult =
+    typeof rendered === "string" ? { text: rendered, forceBlock: false } : rendered;
   const normalized = result.text.replace(/\r\n?/g, "\n").replace(/^\n+|\n+$/g, "");
   if (!normalized.trim()) return undefined;
 
-  return display || result.forceBlock || normalized.includes("\n")
-    ? displayCodeBlock(normalized)
-    : inlineCodeSpan(normalized);
+  if (display || result.forceBlock || normalized.includes("\n")) {
+    return displayCodeBlock(normalized);
+  }
+  return result.rawInline ? normalized : inlineCodeSpan(normalized);
 }
 
 export function containsPotentialMath(markdown: string): boolean {
@@ -276,12 +376,25 @@ export function expandMathInMarkdown(markdown: string, renderMath: MathReplaceme
       }
     }
 
+    if (character === "\\" && !isEscaped(markdown, index)) {
+      const verbEnd = skipTexVerb(markdown, index);
+      if (verbEnd !== undefined) {
+        index = verbEnd;
+        continue;
+      }
+    }
+
     if (character === "$" && !isEscaped(markdown, index)) {
       if (markdown[index + 1] === "$") {
         const closing = findUnescapedSequence(markdown, "$$", index + 2);
         if (closing >= 0) {
           const end = closing + 2;
-          const replacement = replacementFor(markdown.slice(index + 2, closing), true, renderMath);
+          const replacement = replacementFor(
+            markdown.slice(index + 2, closing),
+            true,
+            spanContext(markdown, index, end),
+            renderMath,
+          );
           if (replacement !== undefined) {
             replace(index, end, replacement);
           } else {
@@ -305,7 +418,12 @@ export function expandMathInMarkdown(markdown: string, renderMath: MathReplaceme
           }
 
           const end = closing + 1;
-          const replacement = replacementFor(latex, false, renderMath);
+          const replacement = replacementFor(
+            latex,
+            false,
+            spanContext(markdown, index, end),
+            renderMath,
+          );
           if (replacement !== undefined) {
             replace(index, end, replacement);
           } else {
@@ -324,7 +442,12 @@ export function expandMathInMarkdown(markdown: string, renderMath: MathReplaceme
         if (closing >= 0) {
           const end = closing + 2;
           const display = delimiter === "[";
-          const replacement = replacementFor(markdown.slice(index + 2, closing), display, renderMath);
+          const replacement = replacementFor(
+            markdown.slice(index + 2, closing),
+            display,
+            spanContext(markdown, index, end),
+            renderMath,
+          );
           if (replacement !== undefined) {
             replace(index, end, replacement);
           } else {
@@ -337,12 +460,19 @@ export function expandMathInMarkdown(markdown: string, renderMath: MathReplaceme
       const environment = BLOCK_ENVIRONMENT_PATTERN.exec(markdown.slice(index));
       if (environment) {
         const environmentName = environment[1]!;
-        const closingSequence = `\\end{${environmentName}}`;
-        const closing = markdown.indexOf(closingSequence, index + environment[0].length);
-        if (closing >= 0) {
-          const end = closing + closingSequence.length;
+        const end = findEnvironmentEnd(
+          markdown,
+          index + environment[0].length,
+          environmentName,
+        );
+        if (end >= 0) {
           const display = environmentName !== "math";
-          const replacement = replacementFor(markdown.slice(index, end), display, renderMath);
+          const replacement = replacementFor(
+            markdown.slice(index, end),
+            display,
+            spanContext(markdown, index, end),
+            renderMath,
+          );
           if (replacement !== undefined) {
             replace(index, end, replacement);
           } else {

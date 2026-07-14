@@ -5,6 +5,7 @@ import {
   Markdown,
   setCapabilities,
   setCellDimensions,
+  visibleWidth,
   type MarkdownTheme,
 } from "@earendil-works/pi-tui";
 import piMathExtension from "../src/index.js";
@@ -43,6 +44,10 @@ function imageLines(lines: string[]): string[] {
   return lines.filter(isImageLine);
 }
 
+function kittyImageCount(lines: string[]): number {
+  return lines.join("\n").match(/\x1b_Ga=T,/gu)?.length ?? 0;
+}
+
 function imageColumns(line: string): number {
   const match = /(?:^|,)c=(\d+)(?:,|;)/.exec(line);
   assert.ok(match);
@@ -78,9 +83,27 @@ test("extension injects terminal images without changing source messages", async
     const inlineSource = String.raw`Einstein wrote $E=mc^2$.`;
     const inline = new Markdown(inlineSource, 0, 0, markdownTheme);
     const inlineRendered = inline.render(80);
-    assert.equal(imageLines(inlineRendered).length, 1);
-    assert.doesNotMatch(inlineRendered.join("\n"), /E=mc|pi-math|```/u);
+    assert.equal(kittyImageCount(inlineRendered), 1);
+    assert.match(inlineRendered.join("\n"), /Einstein wrote .*\./u);
+    assert.doesNotMatch(inlineRendered.join("\n"), /E=mc|\$E/u);
     assert.equal((inline as unknown as { text: string }).text, inlineSource);
+    assert.deepEqual(inline.render(80), inlineRendered);
+    assert.ok(inlineRendered.every((line) => visibleWidth(line) <= 80));
+
+    const chineseSource = String.raw`若 \(n\) 有奇素因子 \(p\)，则保留句内公式。
+
+- \(n=4\);`;
+    const chinese = new Markdown(chineseSource, 0, 0, markdownTheme);
+    const chineseRendered = chinese.render(80);
+    assert.equal(kittyImageCount(chineseRendered), 3);
+    assert.match(chineseRendered.join("\n"), /若 .* 有奇素因子 .*，则保留句内公式。/u);
+    assert.match(chineseRendered.join("\n"), /- .*;/u);
+    assert.doesNotMatch(chineseRendered.join("\n"), /\\\(|\\\)|n=4/u);
+    assert.equal((chinese as unknown as { text: string }).text, chineseSource);
+    assert.ok(chineseRendered.every((line) => visibleWidth(line) <= 80));
+
+    const standaloneInline = new Markdown(String.raw`\(E=mc^2\)`, 0, 0, markdownTheme);
+    assert.equal(kittyImageCount(standaloneInline.render(80)), 1);
 
     const displaySource = String.raw`Result:
 $$

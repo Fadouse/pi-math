@@ -13,7 +13,7 @@ import {
 } from "./transform.js";
 
 const DEFAULT_FORMULA_COLOR = "#b5bd68";
-const MAX_FORMULA_HEIGHT_CELLS = 32;
+const MAX_RASTER_HEIGHT_PX = 4096;
 
 type MarkdownInternals = {
   text: string;
@@ -50,8 +50,19 @@ function formulaColor(markdown: MarkdownInternals): string {
     .join("")}`;
 }
 
-function imageMarker(imageId: number, index: number): string {
-  return `__PI_MATH_IMAGE_${imageId}_${index}__`;
+function imageMarker(
+  imageId: number,
+  index: number,
+  columns: number,
+  inline: boolean,
+): string {
+  if (!inline) return `__PI_MATH_IMAGE_${imageId}_${index}__`;
+  const privateUseCharacter = String.fromCodePoint(0xe000 + (index % 0x1900));
+  return privateUseCharacter.repeat(columns);
+}
+
+function allocateMathImageId(): number {
+  return (allocateImageId() & 0xffffff) || 1;
 }
 
 /**
@@ -68,9 +79,10 @@ export function installMarkdownMathPatch(renderer: TerminalMathRenderer): MathPa
   const patchedRender: MarkdownRender = function (width: number): string[] {
     const markdown = this as unknown as MarkdownInternals;
     const source = markdown.text;
+    const protocol = getCapabilities().images;
     if (
       !enabled ||
-      !getCapabilities().images ||
+      !protocol ||
       typeof source !== "string" ||
       !containsPotentialMath(source)
     ) {
@@ -84,7 +96,8 @@ export function installMarkdownMathPatch(renderer: TerminalMathRenderer): MathPa
     const color = formulaColor(markdown);
     const cells = getCellDimensions();
     const contentWidth = Math.max(1, width - paddingX * 2);
-    const layoutKey = `${width}:${paddingX}:${color}:${cells.widthPx}:${cells.heightPx}`;
+    const layoutKey = `${width}:${paddingX}:${color}:${protocol}:${cells.widthPx}:${cells.heightPx}`;
+    const maxBlockRows = Math.max(1, Math.floor(MAX_RASTER_HEIGHT_PX / cells.heightPx));
 
     let transformed: string;
     let placements: FormulaImagePlacement[];
@@ -93,19 +106,29 @@ export function installMarkdownMathPatch(renderer: TerminalMathRenderer): MathPa
       ({ transformed, placements } = cached);
     } else {
       placements = [];
-      transformed = expandMathInMarkdown(source, (latex, display) => {
+      transformed = expandMathInMarkdown(source, (latex, display, context) => {
+        const inline = !display && !context.standalone;
+        if (inline && protocol !== "kitty") return undefined;
+
         const raster = renderer.render(latex, display, color, {
           maxWidthCells: contentWidth,
-          maxHeightCells: MAX_FORMULA_HEIGHT_CELLS,
+          maxHeightCells: inline ? 1 : maxBlockRows,
           cellWidthPx: cells.widthPx,
           cellHeightPx: cells.heightPx,
+          fitHeight: inline,
         });
         if (!raster) return undefined;
 
-        const imageId = allocateImageId();
-        const marker = imageMarker(imageId, placements.length);
-        placements.push({ marker, imageId, raster });
-        return { text: marker, forceBlock: true };
+        const imageId = allocateMathImageId();
+        const marker = imageMarker(imageId, placements.length, raster.columns, inline);
+        placements.push({
+          marker,
+          imageId,
+          raster,
+          inline,
+          fallbackText: source.slice(context.start, context.end),
+        });
+        return { text: marker, forceBlock: !inline, rawInline: inline };
       });
       transformCache.set(this, { source, layoutKey, transformed, placements });
     }

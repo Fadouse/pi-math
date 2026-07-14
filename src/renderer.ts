@@ -2,7 +2,9 @@ import {
   createSvgMathRenderer,
   type FormulaRaster,
   type FormulaRasterLayout,
+  type FormulaRenderFailure,
   type SvgMathRenderer,
+  type SvgMathRendererOptions,
 } from "./svg-renderer.js";
 
 const STRIPPABLE_ENVIRONMENTS = new Set(["equation", "equation*", "displaymath", "math"]);
@@ -16,6 +18,8 @@ export interface TerminalMathRenderer {
   ): FormulaRaster | undefined;
   clear(): void;
   readonly cacheSize: number;
+  readonly cacheBytes: number;
+  readonly lastFailure: FormulaRenderFailure | undefined;
 }
 
 function isEscaped(text: string, index: number): boolean {
@@ -37,7 +41,11 @@ function findMatchingBrace(text: string, opening: number): number {
   return -1;
 }
 
-function removeAnnotationCommand(input: string, command: "label" | "tag"): string {
+function replaceBracedCommand(
+  input: string,
+  command: "label" | "tag",
+  replacement: (body: string, starred: boolean) => string,
+): string {
   let output = input;
   let searchFrom = 0;
   const marker = `\\${command}`;
@@ -45,7 +53,8 @@ function removeAnnotationCommand(input: string, command: "label" | "tag"): strin
     const start = output.indexOf(marker, searchFrom);
     if (start < 0) break;
     let cursor = start + marker.length;
-    if (command === "tag" && output[cursor] === "*") cursor++;
+    const starred = command === "tag" && output[cursor] === "*";
+    if (starred) cursor++;
     if (/[A-Za-z]/.test(output[cursor] ?? "")) {
       searchFrom = cursor;
       continue;
@@ -57,8 +66,10 @@ function removeAnnotationCommand(input: string, command: "label" | "tag"): strin
     }
     const closing = findMatchingBrace(output, cursor);
     if (closing < 0) break;
-    output = output.slice(0, start) + output.slice(closing + 1);
-    searchFrom = start;
+    const body = output.slice(cursor + 1, closing);
+    const rendered = replacement(body, starred);
+    output = output.slice(0, start) + rendered + output.slice(closing + 1);
+    searchFrom = start + rendered.length;
   }
   return output;
 }
@@ -72,7 +83,10 @@ function unwrapOuterEnvironment(input: string): string | undefined {
 }
 
 function normalizeLatex(input: string): string {
-  let latex = removeAnnotationCommand(removeAnnotationCommand(input.trim(), "label"), "tag")
+  let latex = replaceBracedCommand(input.trim(), "label", () => "");
+  latex = replaceBracedCommand(latex, "tag", (body, starred) =>
+    starred ? `\\qquad\\mathrm{${body}}` : `\\qquad\\mathrm{(${body})}`,
+  )
     .replace(/\\(?:notag|nonumber)\b/g, "")
     .trim();
   for (;;) {
@@ -93,9 +107,17 @@ function wrapRenderer(renderer: SvgMathRenderer): TerminalMathRenderer {
     get cacheSize() {
       return renderer.cacheSize;
     },
+    get cacheBytes() {
+      return renderer.cacheBytes;
+    },
+    get lastFailure() {
+      return renderer.lastFailure;
+    },
   };
 }
 
-export async function createTerminalMathRenderer(): Promise<TerminalMathRenderer> {
-  return wrapRenderer(await createSvgMathRenderer());
+export async function createTerminalMathRenderer(
+  options: SvgMathRendererOptions = {},
+): Promise<TerminalMathRenderer> {
+  return wrapRenderer(await createSvgMathRenderer(options));
 }

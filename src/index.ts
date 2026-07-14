@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getCapabilities } from "@earendil-works/pi-tui";
+import { loadSvgMathRendererOptions } from "./config.js";
 import { installMarkdownMathPatch } from "./markdown-patch.js";
 import { createTerminalMathRenderer, type TerminalMathRenderer } from "./renderer.js";
 
@@ -7,11 +8,17 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
 export default async function piMathExtension(pi: ExtensionAPI): Promise<void> {
   let renderer: TerminalMathRenderer | undefined;
   let loadFailure: string | undefined;
   try {
-    renderer = await createTerminalMathRenderer();
+    renderer = await createTerminalMathRenderer(loadSvgMathRendererOptions());
   } catch (error) {
     loadFailure = errorMessage(error);
   }
@@ -55,8 +62,9 @@ export default async function piMathExtension(pi: ExtensionAPI): Promise<void> {
       if (action === "status") {
         const status = patch.isEnabled() ? "enabled" : "disabled";
         const protocol = getCapabilities().images ?? "unsupported terminal";
+        const lastFailure = renderer.lastFailure ? `, last failure: ${renderer.lastFailure.code}` : "";
         ctx.ui.notify(
-          `pi-math is ${status} (${protocol}, ${renderer.cacheSize} cached formulas)`,
+          `pi-math is ${status} (${protocol}, ${renderer.cacheSize} rasters, ${formatBytes(renderer.cacheBytes)}${lastFailure})`,
           "info",
         );
         return;
