@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Markdown, type MarkdownTheme } from "@earendil-works/pi-tui";
+import {
+  Markdown,
+  setCapabilities,
+  setCellDimensions,
+  type MarkdownTheme,
+} from "@earendil-works/pi-tui";
 import piMathExtension from "../src/index.js";
 
 type EventHandler = (event: unknown, ctx: TestContext) => unknown;
@@ -9,9 +14,7 @@ type CommandHandler = (args: string, ctx: TestContext) => unknown;
 
 interface TestContext {
   mode: "tui";
-  ui: {
-    notify(message: string, type?: "info" | "warning" | "error"): void;
-  };
+  ui: { notify(message: string, type?: "info" | "warning" | "error"): void };
 }
 
 const identity = (text: string) => text;
@@ -20,7 +23,7 @@ const markdownTheme: MarkdownTheme = {
   link: identity,
   linkUrl: identity,
   code: identity,
-  codeBlock: identity,
+  codeBlock: (text) => `\x1b[38;2;181;189;104m${text}\x1b[39m`,
   codeBlockBorder: identity,
   quote: identity,
   quoteBorder: identity,
@@ -32,20 +35,31 @@ const markdownTheme: MarkdownTheme = {
   underline: identity,
 };
 
-test("extension renders display-only math and restores the Markdown prototype", async () => {
+function isImageLine(line: string): boolean {
+  return line.includes("\x1b_G") || line.includes("\x1b]1337;File=");
+}
+
+function imageLines(lines: string[]): string[] {
+  return lines.filter(isImageLine);
+}
+
+function imageColumns(line: string): number {
+  const match = /(?:^|,)c=(\d+)(?:,|;)/.exec(line);
+  assert.ok(match);
+  return Number(match[1]);
+}
+
+test("extension injects terminal images without changing source messages", async () => {
+  setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
+  setCellDimensions({ widthPx: 9, heightPx: 18 });
   const originalRender = Markdown.prototype.render;
   const events = new Map<string, EventHandler[]>();
   const commands = new Map<string, CommandHandler>();
   const notifications: string[] = [];
   const context: TestContext = {
     mode: "tui",
-    ui: {
-      notify(message) {
-        notifications.push(message);
-      },
-    },
+    ui: { notify: (message) => notifications.push(message) },
   };
-
   const mockPi = {
     on(name: string, handler: EventHandler) {
       const handlers = events.get(name) ?? [];
@@ -58,14 +72,14 @@ test("extension renders display-only math and restores the Markdown prototype", 
   } as unknown as ExtensionAPI;
 
   await piMathExtension(mockPi);
-
   try {
     assert.notEqual(Markdown.prototype.render, originalRender);
 
     const inlineSource = String.raw`Einstein wrote $E=mc^2$.`;
     const inline = new Markdown(inlineSource, 0, 0, markdownTheme);
-    const inlineOutput = inline.render(80).map((line) => line.trimEnd()).join("\n");
-    assert.match(inlineOutput, /Einstein wrote E=mc²\./u);
+    const inlineRendered = inline.render(80);
+    assert.equal(imageLines(inlineRendered).length, 1);
+    assert.doesNotMatch(inlineRendered.join("\n"), /E=mc|pi-math|```/u);
     assert.equal((inline as unknown as { text: string }).text, inlineSource);
 
     const displaySource = String.raw`Result:
@@ -73,21 +87,23 @@ $$
 \frac{1}{2}
 $$`;
     const display = new Markdown(displaySource, 0, 0, markdownTheme);
-    const displayOutput = display.render(80).map((line) => line.trimEnd()).join("\n");
-    assert.match(displayOutput, /[─━]/u);
-    assert.doesNotMatch(displayOutput, /\\frac|pi-math|```/u);
-    assert.equal((display as unknown as { text: string }).text, displaySource);
+    const wideLines = display.render(80);
+    const wideImage = imageLines(wideLines)[0];
+    assert.ok(wideImage);
+    const resultRow = wideLines.findIndex((line) => line.trim() === "Result:");
+    const imageRow = wideLines.findIndex(isImageLine);
+    assert.equal(imageRow, resultRow + 1);
+    assert.doesNotMatch(wideLines.join("\n"), /\\frac|pi-math|```/u);
 
-    const wideBar = displayOutput.split("\n").find((line) => /[─━]/u.test(line));
-    const narrowOutput = display.render(40).map((line) => line.trimEnd()).join("\n");
-    const narrowBar = narrowOutput.split("\n").find((line) => /[─━]/u.test(line));
-    assert.ok(wideBar && narrowBar);
-    assert.ok(wideBar.search(/\S/u) > narrowBar.search(/\S/u));
+    const narrowImage = imageLines(display.render(40))[0];
+    assert.ok(narrowImage);
+    assert.equal(imageColumns(wideImage), imageColumns(narrowImage));
+    assert.ok(wideImage.indexOf("\x1b_G") > narrowImage.indexOf("\x1b_G"));
 
     const centered = new Markdown("$$x$$", 3, 0, markdownTheme);
-    const centeredLine = centered.render(41).find((line) => line.trim() === "x");
-    assert.ok(centeredLine);
-    assert.equal(centeredLine.search(/\S/u), 20);
+    const centeredImage = imageLines(centered.render(41))[0];
+    assert.ok(centeredImage);
+    assert.ok(centeredImage.indexOf("\x1b_G") >= 18);
 
     const boxedSource = String.raw`First:
 \[
@@ -95,33 +111,32 @@ $$`;
 \]
 Second:
 \[
-\boxed{x-a\text{ 是 }f(x)\text{ 的因式}\iff f(a)=0}.
+\boxed{x-a\text{ is a factor of }f(x)\iff f(a)=0}.
 \]`;
-    const boxedMessage = new Markdown(boxedSource, 0, 0, markdownTheme);
-    const boxedOutput = boxedMessage.render(80).map((line) => line.trimEnd()).join("\n");
-    assert.match(boxedOutput, /│ f\(a\) │\./u);
-    assert.match(boxedOutput, /│ x-a 是 f\(x\) 的因式⟺f\(a\)=0 │\./u);
-    assert.doesNotMatch(boxedOutput, /\\boxed|pi-math|```/u);
-    assert.equal((boxedMessage as unknown as { text: string }).text, boxedSource);
+    const boxed = new Markdown(boxedSource, 0, 0, markdownTheme);
+    assert.equal(imageLines(boxed.render(80)).length, 2);
+    assert.equal((boxed as unknown as { text: string }).text, boxedSource);
 
     const command = commands.get("math-render");
     assert.ok(command);
     await command!("off", context);
-
     const disabledSource = String.raw`$\frac{1}{2}$`;
-    const disabled = new Markdown(disabledSource, 0, 0, markdownTheme);
-    const disabledOutput = disabled.render(80).join("\n");
-    assert.match(disabledOutput, /\\frac/u);
+    assert.match(new Markdown(disabledSource, 0, 0, markdownTheme).render(80).join("\n"), /\\frac/u);
 
     await command!("on", context);
-    const enabled = new Markdown(disabledSource, 0, 0, markdownTheme);
-    assert.match(enabled.render(80).join("\n"), /[─━]/u);
+    assert.equal(
+      imageLines(new Markdown(disabledSource, 0, 0, markdownTheme).render(80)).length,
+      1,
+    );
     assert.ok(notifications.some((message) => message.includes("disabled")));
     assert.ok(notifications.some((message) => message.includes("enabled")));
+
+    setCapabilities({ images: null, trueColor: true, hyperlinks: true });
+    const unsupported = new Markdown("$$x+1$$", 0, 0, markdownTheme).render(80).join("\n");
+    assert.match(unsupported, /\$\$x\+1\$\$/u);
   } finally {
-    for (const handler of events.get("session_shutdown") ?? []) {
-      await handler({}, context);
-    }
+    for (const handler of events.get("session_shutdown") ?? []) await handler({}, context);
+    setCapabilities({ images: null, trueColor: false, hyperlinks: false });
   }
 
   assert.equal(Markdown.prototype.render, originalRender);

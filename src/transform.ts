@@ -1,6 +1,15 @@
 export const GENERATED_MATH_LANGUAGE = "pi-math-4f9c";
 
+export interface MathRenderResult {
+  text: string;
+  forceBlock?: boolean;
+}
+
 export type MathRender = (latex: string, display: boolean) => string | undefined;
+export type MathReplacementRender = (
+  latex: string,
+  display: boolean,
+) => string | MathRenderResult | undefined;
 
 const BLOCK_ENVIRONMENT_PATTERN =
   /^\\begin\{(equation\*?|displaymath|math|align\*?|alignat\*?|flalign\*?|gather\*?|multline\*?|split|aligned|alignedat|gathered|array|matrix|pmatrix|bmatrix|Bmatrix|vmatrix|Vmatrix|cases)\}/;
@@ -191,11 +200,11 @@ function displayCodeBlock(text: string): string {
 function replacementFor(
   latex: string,
   display: boolean,
-  renderMath: MathRender,
+  renderMath: MathReplacementRender,
 ): string | undefined {
   if (!latex.trim()) return undefined;
 
-  let rendered: string | undefined;
+  let rendered: string | MathRenderResult | undefined;
   try {
     rendered = renderMath(latex, display);
   } catch {
@@ -203,10 +212,11 @@ function replacementFor(
   }
 
   if (!rendered) return undefined;
-  const normalized = rendered.replace(/\r\n?/g, "\n").replace(/^\n+|\n+$/g, "");
+  const result = typeof rendered === "string" ? { text: rendered, forceBlock: false } : rendered;
+  const normalized = result.text.replace(/\r\n?/g, "\n").replace(/^\n+|\n+$/g, "");
   if (!normalized.trim()) return undefined;
 
-  return display || normalized.includes("\n")
+  return display || result.forceBlock || normalized.includes("\n")
     ? displayCodeBlock(normalized)
     : inlineCodeSpan(normalized);
 }
@@ -224,7 +234,7 @@ export function containsPotentialMath(markdown: string): boolean {
  * Replace complete LaTeX spans outside Markdown/HTML code with terminal-safe
  * Markdown. Failed or incomplete formulas are left byte-for-byte unchanged.
  */
-export function expandMathInMarkdown(markdown: string, renderMath: MathRender): string {
+export function expandMathInMarkdown(markdown: string, renderMath: MathReplacementRender): string {
   if (!containsPotentialMath(markdown)) return markdown;
 
   const lowerMarkdown = markdown.toLowerCase();
@@ -355,21 +365,27 @@ function stripSgr(text: string): string {
   return text.replace(/\x1b\[[0-9;:]*m/g, "");
 }
 
-/** Remove only the synthetic code fences used to protect rendered equations. */
+/** Remove synthetic fences and their Markdown-only vertical margins. */
 export function stripGeneratedMathFenceLines(lines: string[]): string[] {
   const output: string[] = [];
   let insideGeneratedMath = false;
+  let suppressFollowingBlankLines = false;
 
   for (const line of lines) {
     const plain = stripSgr(line).trim();
     if (!insideGeneratedMath && plain === `\`\`\`${GENERATED_MATH_LANGUAGE}`) {
+      while (output.length > 0 && stripSgr(output.at(-1)!).trim() === "") output.pop();
       insideGeneratedMath = true;
+      suppressFollowingBlankLines = false;
       continue;
     }
     if (insideGeneratedMath && plain === "```") {
       insideGeneratedMath = false;
+      suppressFollowingBlankLines = true;
       continue;
     }
+    if (!insideGeneratedMath && suppressFollowingBlankLines && plain === "") continue;
+    suppressFollowingBlankLines = false;
     output.push(line);
   }
 

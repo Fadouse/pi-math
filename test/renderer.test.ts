@@ -1,43 +1,86 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { createTerminalMathRenderer } from "../src/renderer.js";
+import type { FormulaRasterLayout } from "../src/svg-renderer.js";
 
-test("libtexprintf renders common terminal math layouts", async () => {
+const layout: FormulaRasterLayout = {
+  maxWidthCells: 120,
+  maxHeightCells: 32,
+  cellWidthPx: 9,
+  cellHeightPx: 18,
+};
+
+function isPng(base64: string): boolean {
+  return Buffer.from(base64, "base64").subarray(0, 8).equals(
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+  );
+}
+
+test("rasterizes LaTeX through MathJax SVG", async () => {
   const renderer = await createTerminalMathRenderer();
-
-  const fraction = renderer.render(String.raw`\frac{x^2+1}{\sqrt{y}}`, true);
-  assert.ok(fraction);
-  assert.match(fraction, /[─━]/u);
-  assert.match(fraction, /√|╲/u);
-
-  const theorem = renderer.render(
-    String.raw`x-a\text{ 是 }f(x)\text{ 的因式}\iff f(a)=0`,
-    false,
-  );
-  assert.equal(theorem, "x-a 是 f(x) 的因式⟺f(a)=0");
-
-  const boxed = renderer.render(String.raw`\boxed{x=1}`, true);
-  assert.ok(boxed?.startsWith("┌"));
-  assert.ok(boxed?.endsWith("┘"));
-
-  const boxedWithPeriod = renderer.render(String.raw`\boxed{f(a)}.`, true);
-  assert.equal(boxedWithPeriod, "┌──────┐\n│ f(a) │.\n└──────┘");
-
-  const boxedTheoremWithPeriod = renderer.render(
-    String.raw`\boxed{x-a\text{ 是 }f(x)\text{ 的因式}\iff f(a)=0}.`,
+  const result = renderer.render(
+    String.raw`x=\frac{-b\pm\sqrt{b^2-4ac}}{2a}`,
     true,
+    "#b5bd68",
+    layout,
   );
-  assert.match(boxedTheoremWithPeriod ?? "", /│ x-a 是 f\(x\) 的因式⟺f\(a\)=0 │\./u);
+  assert.ok(result);
+  assert.ok(isPng(result.base64Data));
+  assert.equal(result.widthPx, result.columns * layout.cellWidthPx * 2);
+  assert.equal(result.heightPx, result.rows * layout.cellHeightPx * 2);
+  assert.equal(result.pixelsPerEx, layout.cellHeightPx * 0.5);
+});
 
-  const equation = renderer.render(
-    String.raw`\begin{equation}a=b\end{equation}`,
-    true,
+test("uses one fixed font scale for every formula", async () => {
+  const renderer = await createTerminalMathRenderer();
+  const formulas = [
+    String.raw`(a+b)^2=a^2+2ab+b^2`,
+    String.raw`a^2+b^2=c^2`,
+    String.raw`\int_a^b f(x)\,dx=F(b)-F(a)`,
+    String.raw`e^x=\sum_{n=0}^{\infty}\frac{x^n}{n!}`,
+  ];
+  const rasters = formulas.map((formula) => renderer.render(formula, true, "#ffffff", layout));
+  assert.ok(rasters.every(Boolean));
+  assert.deepEqual(
+    rasters.map((raster) => raster!.pixelsPerEx),
+    Array.from({ length: formulas.length }, () => layout.cellHeightPx * 0.5),
   );
-  assert.equal(equation, "a=b");
+});
 
-  assert.equal(renderer.render(String.raw`\definitelyUnknown{x}`, false), undefined);
-  assert.ok(renderer.cacheSize >= 5);
+test("uses the smallest width-only shrink needed for oversized formulas", async () => {
+  const renderer = await createTerminalMathRenderer();
+  const formula = String.raw`x=\frac{-b\pm\sqrt{b^2-4ac}}{2a}`;
+  const medium = renderer.render(formula, true, "#fff000", { ...layout, maxWidthCells: 12 });
+  const narrow = renderer.render(formula, true, "#fff000", { ...layout, maxWidthCells: 8 });
+  assert.ok(medium);
+  assert.ok(narrow);
+  assert.equal(narrow.columns, 8);
+  assert.ok(narrow.pixelsPerEx < medium.pixelsPerEx);
+  assert.ok(medium.pixelsPerEx <= layout.cellHeightPx * 0.5);
+  assert.equal(narrow.widthPx, 8 * layout.cellWidthPx * 2);
+});
 
+test("rejects invalid LaTeX safely", async () => {
+  const renderer = await createTerminalMathRenderer();
+  assert.equal(renderer.render(String.raw`\definitelyUnknown{x}`, true, "#fff000", layout), undefined);
+  assert.equal(renderer.render(String.raw`\frac{x}{`, true, "#fff000", layout), undefined);
+});
+
+test("rasterizes the deeply nested regression without clipping", async () => {
+  const renderer = await createTerminalMathRenderer();
+  const source = readFileSync(new URL("./fixtures/field-theory.tex", import.meta.url), "utf8");
+  const result = renderer.render(source, true, "#b5bd68", layout);
+  assert.ok(result);
+  assert.ok(isPng(result.base64Data));
+  assert.ok(result.columns <= layout.maxWidthCells);
+  assert.ok(result.rows <= layout.maxHeightCells);
+  assert.ok(result.widthPx <= 4096);
+  assert.ok(result.heightPx <= 4096);
+
+  const cached = renderer.render(source, true, "#b5bd68", layout);
+  assert.equal(cached, result);
+  assert.ok(renderer.cacheSize >= 1);
   renderer.clear();
   assert.equal(renderer.cacheSize, 0);
 });

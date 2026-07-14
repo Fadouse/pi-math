@@ -34,6 +34,15 @@ test("promotes multiline inline output to a display block", () => {
   assert.match(output, /───/);
 });
 
+test("can force inline math into an image block marker", () => {
+  const output = expandMathInMarkdown("value $x/y$ here", () => ({
+    text: "__PI_MATH_IMAGE_1__",
+    forceBlock: true,
+  }));
+  assert.match(output, new RegExp(GENERATED_MATH_LANGUAGE));
+  assert.match(output, /__PI_MATH_IMAGE_1__/u);
+});
+
 test("leaves fenced, inline, and HTML code untouched", () => {
   const source = [
     "```ts",
@@ -95,4 +104,17 @@ test("strips only synthetic rendered-math fences", () => {
     "  denominator",
     "ordinary line",
   ]);
+});
+
+test("removes Markdown-only blank margins around generated math", () => {
+  const lines = [
+    "before",
+    "",
+    `\`\`\`${GENERATED_MATH_LANGUAGE}`,
+    "  x=1",
+    "```",
+    "",
+    "after",
+  ];
+  assert.deepEqual(stripGeneratedMathFenceLines(lines), ["before", "  x=1", "after"]);
 });
