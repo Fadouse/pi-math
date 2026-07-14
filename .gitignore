@@ -1,0 +1,7 @@
+node_modules/
+dist/
+coverage/
+.pi/
+*.log
+.DS_Store
+.fuse_hidden*
