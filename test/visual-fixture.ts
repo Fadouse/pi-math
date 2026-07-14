@@ -71,24 +71,43 @@ e^x=\sum_{n=0}^{\infty}\frac{x^n}{n!}
 \[
 f(x)=\frac{1}{\sigma\sqrt{2\pi}}e^{-\frac{(x-\mu)^2}{2\sigma^2}}
 \]`,
-  inline: String.raw`## Inline image flow regression
+  inline: String.raw`## Variational calculus in a single Markdown response
 
-反设存在解，取 \(z\) 最小的本原解，即 \(\gcd(x,y)=1\)。模 \(16\) 考察可知 \(x,y\) 中恰有一个为偶数。
+Let \(q:[t_0,t_1]\to\mathbb{R}^n\) be a smooth path with fixed endpoints, and let \(L(q,\dot q,t)\) be its Lagrangian. The action is \(S[q]=\int_{t_0}^{t_1}L(q,\dot q,t)\,dt\).
 
-由于
-
-\[
-(x^2)^2+(y^2)^2=z^2,
-\]
-
-它构成一个本原勾股三元组，所以存在互素、奇偶性相反的 \(m,n\)，使得
+For a variation \(q_\varepsilon=q+\varepsilon\eta\), where \(\eta(t_0)=\eta(t_1)=0\), differentiate under the integral and integrate the velocity term by parts:
 
 \[
-x^2=m^2-n^2,\qquad y^2=2mn,\qquad z=m^2+n^2.
+\begin{aligned}
+\delta S[q;\eta]
+&=\left.\frac{d}{d\varepsilon}S[q_\varepsilon]\right|_{\varepsilon=0} \\[3pt]
+&=\int_{t_0}^{t_1}\left(
+\frac{\partial L}{\partial q}\cdot\eta
+ +\frac{\partial L}{\partial\dot q}\cdot\dot\eta
+\right)dt \\[3pt]
+&=\left[\frac{\partial L}{\partial\dot q}\cdot\eta\right]_{t_0}^{t_1}
+ +\int_{t_0}^{t_1}\left(
+\frac{\partial L}{\partial q}
+ -\frac{d}{dt}\frac{\partial L}{\partial\dot q}
+\right)\cdot\eta\,dt.
+\end{aligned}
 \]
 
-因为 \(2mn\) 是平方且 \(\gcd(m,n)=1\)，所以 \(m=r^2\)、\(n=2s^2\)。
-`,
+The boundary term vanishes. Because \(\eta\) is arbitrary, the fundamental lemma gives the Euler–Lagrange equation
+
+\[
+\boxed{\frac{d}{dt}\frac{\partial L}{\partial\dot q}-\frac{\partial L}{\partial q}=0}.
+\]
+
+For \(L=\tfrac12m\dot q^{\,2}-V(q)\), this becomes \(m\ddot q=-\nabla V(q)\). If \(L\) has no explicit time dependence, the corresponding conserved quantity is
+
+\[
+E=\dot q\cdot\frac{\partial L}{\partial\dot q}-L,
+\qquad
+\frac{dE}{dt}=0.
+\]
+
+The same notation remains readable inside prose: for the harmonic oscillator \(V(q)=\tfrac12m\omega^2q^2\), the solution \(q(t)=A\cos(\omega t)+B\sin(\omega t)\) traces an ellipse in phase space, while \(E=\tfrac12m\dot q^{\,2}+\tfrac12m\omega^2q^2\) stays constant.`,
 };
 
 const fixtureName = process.argv[2] ?? "aligned";

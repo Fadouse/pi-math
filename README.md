@@ -4,9 +4,7 @@ Render LaTeX in the Pi TUI as real, transparent terminal images.
 
 pi-math uses MathJax for mathematical typesetting and Resvg for rasterization. It does not approximate formulas with Unicode glyphs or hand-built character geometry.
 
-![MathJax formulas rendered in Ghostty through Pi Markdown](docs/images/formula-gallery.png)
-
-![Inline MathJax images flowing inside Chinese prose in Ghostty](docs/images/inline-formulas.png)
+![Long-form English mathematics with inline and display MathJax rendered in Ghostty through Pi Markdown](docs/images/pi-math-showcase.png)
 
 ## Features
 
