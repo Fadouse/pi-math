@@ -83,6 +83,8 @@ export function installMarkdownMathPatch(renderer: TerminalMathRenderer): MathPa
     if (
       !enabled ||
       !protocol ||
+      process.env.TMUX ||
+      /^(tmux|screen)/i.test(process.env.TERM ?? "") ||
       typeof source !== "string" ||
       !containsPotentialMath(source)
     ) {
